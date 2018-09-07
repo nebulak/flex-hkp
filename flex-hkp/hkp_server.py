@@ -14,17 +14,54 @@ app = Flask(__name__)
 
 ## Some vars
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-GPG_HOME = os.path.join(BASE_DIR, 'keysigning', 'gpg-home')
-KEY_STORE = os.path.join(BASE_DIR, 'keysigning', 'keys')
+GPG_HOME = os.path.join(BASE_DIR, 'keystore', 'gpg-home')
+KEY_STORE = os.path.join(BASE_DIR, 'keystore', 'keys')
+
+RESTRICT_DOMAIN = False
+ALLOWED_DOMAINS = []
+VERIFY_EMAIL = False
+SMTP_HOST = ""
+SMTP_PORT = 0
+SMTP_USER = ""
+SMTP_PASSWORD = ""
+SMTP_SENDER = ""
+SMTP_STARTTLS = True
+
+
+
 
 # check and fix
 if not os.path.exists(GPG_HOME):
-	print '%s does not exist. Creating...' % GPG_HOME
-	os.makedirs(GPG_HOME, 0700)
+	print ('%s does not exist. Creating...' % GPG_HOME)
+	os.makedirs(GPG_HOME, 0o700)
 
 if not os.path.exists(KEY_STORE):
-	print '%s does not exist. Creating...' % KEY_STORE
-	os.makedirs(KEY_STORE, 0700)
+	print ('%s does not exist. Creating...' % KEY_STORE)
+	os.makedirs(KEY_STORE, 0o700)
+
+def send_mail():
+	import smtplib
+	receivers = ['to@todomain.com']
+
+	message = """From: From Person <from@fromdomain.com>
+	To: To Person <to@todomain.com>
+	Subject: SMTP e-mail test
+
+	This is a test e-mail message.
+	"""
+
+	try:
+		smtpObj = smtplib.SMTP(SMTP_HOST)
+		smtpObj.sendmail(SMTP_SENDER, receivers, message)
+		print ("Successfully sent email")
+
+		# set up the SMTP server
+		s = smtplib.SMTP(host=SMTP_HOST, port=SMTP_PORT)
+		s.starttls()
+		s.login(SMTP_USER, SMTP_PASSWORD)
+	except SMTPException:
+	    print ("Error: unable to send email")
+
 
 def get_file_path(keyid=''):
 	"""
@@ -65,14 +102,14 @@ def search_key():
 					int(search, 16)
 				except:
 					return return_error(404, 'ID/Fingerprint incomplete')
-				
+
 				# now get the key and dump it
 				if len(search) == 40:
 					# v4 fingerprint - keyid is last 16 digits
 					search = search[-16:]
-	
+
 				keyfile = get_file_path(search)
-				
+
 				# now dump it
 				if os.path.exists(keyfile):
 					fp = open(keyfile, 'r')
@@ -152,7 +189,6 @@ def add_key():
 	import gnupg
 	from tempfile import mkdtemp
 	from shutil import rmtree
-
 	# build a temporary place for empty keyring
 	_gpghome = mkdtemp(prefix = os.path.join(GPG_HOME, 'ksp'))
 
@@ -168,17 +204,17 @@ def add_key():
 	import_result = gpg.import_keys(request.form['keytext'])
 	if import_result.count <= 0:
 		return return_error(501, 'Invalid key sent')
-	
+
 	# Now list the keys in the keyring and store it on the FS
 	imported_keys = gpg.list_keys()
 	for key in imported_keys:
 		# Create a keypath (and dirs if needed)
 		_path = get_file_path(key['keyid'])
 		if not os.path.exists(os.path.dirname(_path)):
-			os.makedirs(os.path.dirname(_path), 0700)
+			os.makedirs(os.path.dirname(_path), 0o700)
 
 		if not os.path.exists(os.path.dirname(get_file_path(key['keyid'][-8:]))):
-			os.makedirs(os.path.dirname(get_file_path(key['keyid'][-8:])), 0700)
+			os.makedirs(os.path.dirname(get_file_path(key['keyid'][-8:])), 0o700)
 
 		# Store the file in path/1234/5678/1234567812345678
 		if not os.path.exists(_path):
@@ -189,15 +225,12 @@ def add_key():
 			# and symlink it to the short ID
 			if not os.path.exists(get_file_path(key['keyid'][-8:])):
 				os.symlink(_path, get_file_path(key['keyid'][-8:]))
-	
+
 	# Nuke the temp gpg home
 	rmtree(_gpghome)
 	return key['keyid'], 200
 
 @app.route('/', methods=['GET'])
-@app.route('/about', methods=['GET'])
-@app.route('/help', methods=['GET'])
-@app.route('/instructions', methods=['GET'])
 def show_instructions_page():
     return render_template('instructions.html')
 

@@ -11,17 +11,18 @@ from flask import Flask, request, render_template, redirect
 import os
 import secrets
 import sqlite3
+import re
 
 app = Flask(__name__)
 
-## Path configuration
+# Path configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GPG_HOME = os.path.join(BASE_DIR, 'keystore', 'gpg-home')
 GPG_UNVERIFIED_HOME = os.path.join(BASE_DIR, 'keystore', 'gpg_unverified')
 KEY_STORE = os.path.join(BASE_DIR, 'keystore', 'keys')
 BASE_URL = "http://127.0.0.1"
 
-## Settings
+# Settings
 RESTRICT_DOMAIN = True
 ALLOWED_DOMAINS = []
 VERIFY_EMAIL = False
@@ -34,14 +35,13 @@ SMTP_STARTTLS = True
 DB_PATH = os.path.join(BASE_DIR, 'keystore', 'database.sqlite3')
 
 
-
 # Setup keystore directories
 if not os.path.exists(GPG_HOME):
-	print ('%s does not exist. Creating...' % GPG_HOME)
+	print('%s does not exist. Creating...' % GPG_HOME)
 	os.makedirs(GPG_HOME, 0o700)
 
 if not os.path.exists(KEY_STORE):
-	print ('%s does not exist. Creating...' % KEY_STORE)
+	print('%s does not exist. Creating...' % KEY_STORE)
 	os.makedirs(KEY_STORE, 0o700)
 
 
@@ -79,7 +79,12 @@ def create_validation_link(email, db_path=DB_PATH):
 	cur.execute(insert_token_sql, (email, validation_token, now))
 	return "".join(BASE_URL, '/verify?email=', base64.b64encode(email), '&token=', validation_token )
 
-
+# //TODO: classes
+# //TODO: class MainKeyRing(add, update, delete, does key for email exist, list)
+# //TODO: class KeyInspector(is_upload_key, get_key_domain, is_key_domain_valid, get_key_email_address, get_localpart_zb32)
+# //TODO: class WKDFilestore(add, update, delete, does key for email exist, list)
+# //TODO: class HKPTools (zb32_encode, zb32_decode)
+# //TODO: class HKPMailer (send)
 
 # Email functions
 def send_mail(recipients, message):
@@ -256,16 +261,21 @@ def add_key():
 	# check for valid domain
 	if RESTRICT_DOMAIN:
 		imported_keys = gpg.list_keys()
+		is_key_valid_domain = False
 		for key in imported_keys:
-			email_domain = re.search("@[\w.]+", key['uid'])
-			is_key_valid_domain = False
+			username, email_domain = key['uids'][0].split("@", 1)
+			email_domain = email_domain.replace('>', '')
+			email_domain = email_domain.replace(' ', '')
+			print(email_domain)
 			for domain in ALLOWED_DOMAINS:
-				if domain is email_domain:
+				if domain == email_domain:
 					is_key_valid_domain = True
 					break
-			if is_key_valid_domain is False:
-				rmtree(_gpghome)
-				return return_error(501, 'Invalid key sent. Domain is not allowed.')
+			if is_key_valid_domain:
+				break
+		if is_key_valid_domain == False:
+			rmtree(_gpghome)
+			return return_error(501, 'Invalid key sent. Domain is not allowed.')
 
 
 	# is email verification enabled
@@ -278,6 +288,7 @@ def add_key():
 			if len(email_addresses) >= 1 or len(email_addresses) <= 0:
 				rmtree(_gpghome)
 				return return_error(501, 'Invalid key sent. No email-address in UID or more than one email-address in UID.')
+
 		email_address = email_addresses[0]
 
 		# generate and safe validation token in database
@@ -308,6 +319,7 @@ def add_key():
 	for key in imported_keys:
 		# Create a keypath (and dirs if needed)
 		_path = get_key_file_path(key['keyid'])
+		print(key['keyid'])
 		if not os.path.exists(os.path.dirname(_path)):
 			os.makedirs(os.path.dirname(_path), 0o700)
 

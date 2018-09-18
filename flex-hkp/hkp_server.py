@@ -1,11 +1,4 @@
 #!/usr/bin/env python
-#
-# Desc     : Simple HKP server for collecting PGP keys for keysigning parties
-# Author   : Vladimir vitkov <vvitkov@linux-bg.org>
-# License  : Apache 2.0
-# Version  : 1.0
-# Changelog: 2014.11.18 - first stable release
-#	2014.11.05 - Initial version
 
 from flask import Flask, request, render_template, redirect
 import os
@@ -24,8 +17,9 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GPG_HOME = os.path.join(BASE_DIR, 'keystore', 'gpg-home')
 GPG_UNVERIFIED_KEYRING = os.path.join(BASE_DIR, 'keystore', 'gpg_unverified')
+GPG_TEMP = os.path.join(BASE_DIR, 'temp')
 GPG_MAIN_KEYRING = os.path.join(BASE_DIR, 'keystore', 'gpg_main')
-KEY_STORE = os.path.join(BASE_DIR, 'keystore', 'keys')
+WKD_KEY_STORE = os.path.join(BASE_DIR, 'keystore', 'keys')
 BASE_URL = "http://127.0.0.1"
 
 # Settings
@@ -46,16 +40,14 @@ if not os.path.exists(GPG_HOME):
 	print('%s does not exist. Creating...' % GPG_HOME)
 	os.makedirs(GPG_HOME, 0o700)
 
-if not os.path.exists(KEY_STORE):
-	print('%s does not exist. Creating...' % KEY_STORE)
-	os.makedirs(KEY_STORE, 0o700)
+if not os.path.exists(WKD_KEY_STORE):
+	print('%s does not exist. Creating...' % WKD_KEY_STORE)
+	os.makedirs(WKD_KEY_STORE, 0o700)
 
 
 
 
 # //TODO: classes
-# //TODO: class MainKeyRing(add, update, delete, does key for email exist, list)
-# //TODO: class WKDFilestore(add, update, delete, does key for email exist, list)
 # //TODO: combine the two above classes in class KeyStore
 
 class KeyInspector(object):
@@ -70,15 +62,15 @@ class KeyInspector(object):
 		self.gpg = None
 
 		# build a temporary place for empty keyring
-		self.temp_keyring_path = mkdtemp(prefix = temp_path)
+		self.temp_keyring_path = mkdtemp(prefix=temp_path)
 
 		# Init the GPG
-		self.gpg = gnupg.GPG(gnupghome = self.temp_keyring_path, options = [
+		self.gpg = gnupg.GPG(gnupghome=self.temp_keyring_path, options=[
 			'--with-colons',
 			'--keyid-format=LONG',
 			'--export-options=export-minimal,export-clean,no-export-attributes',
 			'--import-options=import-minimal,import-clean'
-			], verbose = False)
+			], verbose=False)
 
 		# Blindly try to import and check result. If we have count we are fine
 		import_result = self.gpg.import_keys(self.armored_key)
@@ -106,13 +98,23 @@ class KeyInspector(object):
 		is_key_valid_domain = False
 		for key in imported_keys:
 			for uid in key.get('uids', []):
-                address = email.utils.parseaddr(uid)[1]
+				address = email.utils.parseaddr(uid)[1]
 				if '@' not in addr:
-                    continue
+					continue
 				self.email = address.lower()
 				self.local_part, self.domain = self.email.split("@", 1)
 
 		return self.email, self.local_part, self.domain
+
+	def get_fingerprint():
+		imported_keys = self.gpg.list_keys()
+		for key in imported_keys:
+			for uid in key.get('uids', []):
+				address = email.utils.parseaddr(uid)[1]
+				if '@' not in addr:
+					continue
+				return key.fingerprint
+		return None
 
 
 class HKPMailer(object):
@@ -138,7 +140,7 @@ class HKPMailer(object):
 		try:
 			smtpObj = smtplib.SMTP(self.host)
 			smtpObj.sendmail(self.sender, recipients, complete_message)
-			print ("Successfully sent email")
+			print("Successfully sent email")
 
 			# set up the SMTP server
 			s = smtplib.SMTP(host=self.host, port=self.port)
@@ -146,7 +148,8 @@ class HKPMailer(object):
 				s.starttls()
 			s.login(self.user, self.password)
 		except SMTPException:
-		    print ("Error: unable to send email")
+			print("Error: unable to send email")
+
 
 class KeyVerifier(object):
 	def __init__(self, hkp_mailer):
@@ -198,48 +201,140 @@ class HKPTools:
 	@staticmethod
 	def zb32_encode(bs):
 		"""
-	    Encode bytes bs using zbase32 encoding.
-	    Returns: bytearray
+		Encode bytes bs using zbase32 encoding.
+		Returns: bytearray
 
-	    >>> encode_zbase32(b'\\xd4z\\x04') == b'4t7ye'
-	    True
+		>>> encode_zbase32(b'\\xd4z\\x04') == b'4t7ye'
+		True
+		"""
+		ALPTHABET = b"ybndrfg8ejkmcpqxot1uwisza345h769"
+		result = bytearray()
+		for word in itertools.zip_longest(*([iter(bs)] * 5)):
+			padding_count = word.count(None)
+			n = functools.reduce(lambda x, y: (x << 8) + (y or 0), word, 0)
+			for i in range(0, (40 - 8 * padding_count), 5):
+				result.append(ALPTHABET[(n >> (35 - i)) & 0x1F])
+		return result
+
+	# source: https://gitlab.com/Martin_/generate-openpgpkey-hu-3/blob/master/generate-openpgpkey-hu-3
+	# generate-openpgpkey-hu-3
+	# Copyright 2017, W. Martin Borgert <debacle@debian.org>
+	# License: GPL-3+
+	def localpart2zbase32(s):
+	    """transforms local part to lower case, SHA1s it, and encodes zbase32
+
+	    See https://tools.ietf.org/id/draft-koch-openpgp-webkey-service-01.html
+
+	    >>> localpart2zbase32('Joe.Doe')
+	    'iy9q119eutrkn8s1mk4r39qejnbu3n5q'
 	    """
-	    ALPTHABET = b"ybndrfg8ejkmcpqxot1uwisza345h769"
-	    result = bytearray()
-	    for word in itertools.zip_longest(*([iter(bs)] * 5)):
-	        padding_count = word.count(None)
-	        n = functools.reduce(lambda x, y: (x << 8) + (y or 0), word, 0)
-	        for i in range(0, (40 - 8 * padding_count), 5):
-	            result.append(ALPTHABET[(n >> (35 - i)) & 0x1F])
-	    return result
+	    return encode_zbase32(
+	        hashlib.sha1(s.lower().encode("utf-8")).digest()).decode("utf-8")
 
+# //TODO: class MainKeyRing
 class KeyRing(object):
-	def __init__(self):
-		pass
+	def __init__(self, keyring_path):
+		self.path = keyring_path
+		self.gpg = None
 
-	def add(armored_key):
-		pass
+		# Init the GPG
+		self.gpg = gnupg.GPG(gnupghome = self.path, options = [
+			'--with-colons',
+			'--keyid-format=LONG',
+			'--export-options=export-minimal,export-clean,no-export-attributes',
+			'--import-options=import-minimal,import-clean'
+			], verbose = False)
 
-class WKDStore(object):
-	def __init__(self):
-		pass
+	def add(self, email, armored_key):
+		self.delete(email)
+		self.gpg.import_keys(armored_key)
 
-	def add(armored_key):
-		pass
+	def delete(self, email):
+		fp = self.get_fingerprint_by_email(email)
+		if fp is None:
+			return False
+		self.gpg.delete_keys(fp)
+		return True
+
+	def get_fingerprint_by_email(self, email):
+		imported_keys = self.gpg.list_keys()
+		for key in imported_keys:
+			for uid in key.get('uids', []):
+	            address = email.utils.parseaddr(uid)[1]
+				if '@' not in addr:
+	                continue
+				cur_email = address.lower()
+				if cur_email == email:
+					return key.fingerprint
+		return None
+
+# //TODO: class WKDFilestore(add, update, delete, does key for email exist, list)
+class WKDFileStore(object):
+	def __init__(self, path):
+		self.path = str(WKD_KEY_STORE)
+
+	def add(email, armored_key):
+		self.delete(email)
+		_inspector = KeyInspector(armored_key, GPG_TEMP)
+		_email, _localpart, _domain = _inspector.get_address_info()
+		zb32filename = HKPTools.localpart2zbase32(_localpart)
+		with open(os.path.join(self.path,
+                               zb32zb32filename, "wb") as f:
+            f.write(_keyinspector.gpg.export_keys(_keyinspector.get_fingerprint(), armor=False))
+
+	def delete(email):
+		# get localpart of email
+		address = email.utils.parseaddr(uid)[1]
+		if '@' not in addr:
+			return False
+		address = address.lower()
+		# check if file exists & delete it
+		zb32local = HKPTools.localpart2zbase32(address)
+		key_path = os.path.join(WKD_KEY_STORE, zb32local)
+		if os.path.isfile(key_path) and os.access(key_file, os.R_OK):
+		    os.remove(key_path)
+
+	def is_key_available(email):
+		# check if key for email exists
+		address = email.utils.parseaddr(uid)[1]
+		if '@' not in addr:
+			return False
+		address = address.lower()
+		zb32local = HKPTools.localpart2zbase32(address)
+		key_path = os.path.join(WKD_KEY_STORE, zb32local)
+		if os.path.isfile(key_path) and os.access(key_file, os.R_OK):
+		    return True
+		return False
+
 
 class KeyStore(object):
-	def __init__(self):
-		pass
+	def __init__(self, stores):
+		# //TODO: check if an array of objects is passed
+		# //TODO: implement interface for stores
+		self.stores = stores
 
-	def add(armored_key):
-		pass
+	def add(self, armored_key):
+		for store in self.stores:
+			store.add(armored_key)
 
-def get_key_file_path(keyid=''):
-	"""
-	return the full path to a file containing the key
-	"""
-	keyid = keyid.lower()
-	return str(os.path.join(KEY_STORE, keyid[0:4], keyid[4:8], keyid))
+	def delete(self, email):
+		for store in self.stores:
+			store.delete(email)
+
+	def is_key_available(email):
+		is_key_available = None
+		for store in self.stores:
+			cur_availability_info = store.is_key_available(email)
+			if is_key_available is None:
+				is_key_available = cur_availability_info
+				continue
+			if is_key_available != cur_availability_info:
+				# //TODO: throw exception, because key is not available in all stores
+				return None
+		return cur_availability_info
+
+
+
 
 def return_error(code = 501, text = 'Not supported'):
 	return render_template(
@@ -307,7 +402,7 @@ def search_key():
 			'--export-options=export-minimal,export-clean,no-export-attributes',
 			'--import-options=import-minimal,import-clean'
 			], verbose = False)
-		for root, dirs, files in os.walk(KEY_STORE):
+		for root, dirs, files in os.walk(WKD_KEY_STORE):
 			for fname in files:
 				if not os.path.islink(os.path.join(root, fname)):
 					keydata = open(os.path.join(root, fname), 'r').read()
@@ -359,7 +454,7 @@ def add_key():
 	Add keys that we were sent
 	"""
 
-	key_inspector = KeyInspector(request.form['keytext'])
+	key_inspector = KeyInspector(request.form['keytext'], GPG_TEMP)
 
 	if key_inspector.is_openpgp_key() is False:
 		return return_error(501, 'Invalid key sent')
@@ -401,31 +496,12 @@ def add_key():
 		# //TODO: check result
 		return key['keyid'], 200
 
-
-	# Now list the keys in the keyring and store it on the FS
-	imported_keys = gpg.list_keys()
-	for key in imported_keys:
-		# Create a keypath (and dirs if needed)
-		_path = get_key_file_path(key['keyid'])
-		print(key['keyid'])
-		if not os.path.exists(os.path.dirname(_path)):
-			os.makedirs(os.path.dirname(_path), 0o700)
-
-		if not os.path.exists(os.path.dirname(get_key_file_path(key['keyid'][-8:]))):
-			os.makedirs(os.path.dirname(get_key_file_path(key['keyid'][-8:])), 0o700)
-
-		# Store the file in path/1234/5678/1234567812345678
-		if not os.path.exists(_path):
-			fp = open(_path, 'w')
-			fp.write(gpg.export_keys(key['keyid']))
-			fp.close()
-
-			# and symlink it to the short ID
-			if not os.path.exists(get_key_file_path(key['keyid'][-8:])):
-				os.symlink(_path, get_key_file_path(key['keyid'][-8:]))
-
-	# Nuke the temp gpg home
-	rmtree(_gpghome)
+	# //save key with keystore
+	wkd_store = WKDFileStore(WKD_KEY_STORE)
+	gpg_store = KeyRing(GPG_MAIN_KEYRING)
+	keystore = KeyStore([gpg_store, wkd_store])
+	keystore.add(request.form['keytext'])
+	# //TODO: should we check the result here?
 	return key['keyid'], 200
 
 @app.route('/verify', methods=['GET'])

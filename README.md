@@ -1,4 +1,10 @@
-ksp-web
+flex-hkp
 =======
 
-A web application for organizing keysigning parties
+### TODOs:
+  * [ ] WKD: serving keys
+  * [ ] verify email-address
+  * [ ] config file
+  * [ ] use cases
+  * [ ] authentication
+  * [ ] key search

@@ -9,5 +9,5 @@ flex-hkp
     * [ ] Public non-syncing HKP-Server
     * [ ] Private HKP-Server with email verification
     * [ ] Private HKP-Server with authenticated key-upload using a web-form
-  * [ ] authentication
+  * [ ] tls-client-authentication
   * [ ] key search
